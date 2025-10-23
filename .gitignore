@@ -1,0 +1,37 @@
+# Build artifacts
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.dylib
+*.egg
+*.egg-info/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp

@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Cycle Data Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .folder-browser {
+            margin-bottom: 30px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .browser-header {
+            background: #f5f5f5;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .browser-header button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        
+        .browser-header button:hover {
+            background: #5568d3;
+        }
+        
+        .current-path {
+            flex: 1;
+            padding: 8px 12px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        
+        .folder-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: white;
+        }
+        
+        .folder-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.2s;
+        }
+        
+        .folder-item:hover {
+            background: #f8f8f8;
+        }
+        
+        .folder-item.selected {
+            background: #e3f2fd;
+            border-left: 3px solid #667eea;
+        }
+        
+        .folder-icon {
+            font-size: 20px;
+        }
+        
+        .selected-folders {
+            margin: 20px 0;
+        }
+        
+        .selected-folders h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .folder-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .chip {
+            background: #667eea;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        
+        .chip .remove-btn {
+            background: rgba(255,255,255,0.3);
+            border: none;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 16px;
+            transition: background 0.2s;
+        }
+        
+        .chip .remove-btn:hover {
+            background: rgba(255,255,255,0.5);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+        
+        .btn {
+            padding: 12px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+        
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .results {
+            margin-top: 30px;
+        }
+        
+        .plot-container {
+            margin-bottom: 30px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .plot-header {
+            background: #f5f5f5;
+            padding: 15px;
+            font-weight: 600;
+            font-size: 18px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .plot-image {
+            width: 100%;
+            display: block;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔬 Test Cycle Data Analyzer</h1>
+            <p>Select 5 test cycle folders and analyze your data</p>
+        </div>
+        
+        <div class="content">
+            <div class="folder-browser">
+                <div class="browser-header">
+                    <button onclick="goToParent()">⬆️ Up</button>
+                    <button onclick="goToHome()">🏠 Home</button>
+                    <input type="text" class="current-path" id="currentPath" readonly>
+                </div>
+                <div class="folder-list" id="folderList"></div>
+            </div>
+            
+            <div class="selected-folders">
+                <h3>Selected Folders (<span id="folderCount">0</span>/5)</h3>
+                <div class="folder-chips" id="selectedFolders"></div>
+            </div>
+            
+            <div id="status"></div>
+            
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="clearSelection()">Clear All</button>
+                <button class="btn btn-primary" id="analyzeBtn" onclick="analyze()" disabled>Analyze Data</button>
+            </div>
+            
+            <div id="results"></div>
+        </div>
+    </div>
+    
+    <script>
+        let currentPath = '';
+        let selectedFolders = [];
+        
+        async function loadFolders(path = null) {
+            try {
+                const response = await fetch('/list_folders', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({path: path})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentPath = data.currentPath;
+                    document.getElementById('currentPath').value = currentPath;
+                    
+                    const folderList = document.getElementById('folderList');
+                    folderList.innerHTML = '';
+                    
+                    data.items.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'folder-item';
+                        div.innerHTML = `<span class="folder-icon">📁</span><span>${item.name}</span>`;
+                        
+                        div.onclick = (e) => {
+                            if (e.detail === 1) {
+                                toggleSelection(item.path);
+                            } else if (e.detail === 2) {
+                                loadFolders(item.path);
+                            }
+                        };
+                        
+                        if (selectedFolders.includes(item.path)) {
+                            div.classList.add('selected');
+                        }
+                        
+                        folderList.appendChild(div);
+                    });
+                }
+            } catch (error) {
+                showStatus('Error loading folders: ' + error.message, 'error');
+            }
+        }
+        
+        function toggleSelection(path) {
+            const index = selectedFolders.indexOf(path);
+            if (index > -1) {
+                selectedFolders.splice(index, 1);
+            } else {
+                if (selectedFolders.length < 5) {
+                    selectedFolders.push(path);
+                } else {
+                    showStatus('Maximum 5 folders can be selected', 'error');
+                    return;
+                }
+            }
+            updateSelectedDisplay();
+            loadFolders(currentPath);
+        }
+        
+        function updateSelectedDisplay() {
+            const container = document.getElementById('selectedFolders');
+            container.innerHTML = '';
+            
+            selectedFolders.forEach((path, index) => {
+                const chip = document.createElement('div');
+                chip.className = 'chip';
+                chip.innerHTML = `
+                    <span>${index + 1}. ${path.split('/').pop()}</span>
+                    <button class="remove-btn" onclick="removeFolder(${index})">×</button>
+                `;
+                container.appendChild(chip);
+            });
+            
+            document.getElementById('folderCount').textContent = selectedFolders.length;
+            document.getElementById('analyzeBtn').disabled = selectedFolders.length !== 5;
+        }
+        
+        function removeFolder(index) {
+            selectedFolders.splice(index, 1);
+            updateSelectedDisplay();
+            loadFolders(currentPath);
+        }
+        
+        function clearSelection() {
+            selectedFolders = [];
+            updateSelectedDisplay();
+            loadFolders(currentPath);
+        }
+        
+        function goToParent() {
+            const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
+            loadFolders(parent);
+        }
+        
+        function goToHome() {
+            loadFolders();
+        }
+        
+        function showStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+            status.style.display = 'block';
+        }
+        
+        async function analyze() {
+            if (selectedFolders.length !== 5) {
+                showStatus('Please select exactly 5 folders', 'error');
+                return;
+            }
+            
+            const results = document.getElementById('results');
+            results.innerHTML = '<div class="loading"><div class="spinner"></div><p>Analyzing data...</p></div>';
+            showStatus('Processing data...', 'info');
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({folders: selectedFolders})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`Analysis complete! Generated ${data.plots.length} plot(s)`, 'success');
+                    
+                    results.innerHTML = '';
+                    data.plots.forEach(plot => {
+                        const plotDiv = document.createElement('div');
+                        plotDiv.className = 'plot-container';
+                        plotDiv.innerHTML = `
+                            <div class="plot-header">Channel ${plot.channel}</div>
+                            <img src="${plot.image}" class="plot-image" alt="Plot for channel ${plot.channel}">
+                        `;
+                        results.appendChild(plotDiv);
+                    });
+                } else {
+                    showStatus('Error: ' + data.error, 'error');
+                    results.innerHTML = '';
+                }
+            } catch (error) {
+                showStatus('Error analyzing data: ' + error.message, 'error');
+                results.innerHTML = '';
+            }
+        }
+        
+        // Initialize
+        loadFolders();
+    </script>
+</body>
+</html>
