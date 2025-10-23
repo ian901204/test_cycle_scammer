@@ -12,9 +12,7 @@ __pycache__/
 *.egg
 *.egg-info/
 
-# PyInstaller
-*.manifest
-*.spec
+# PyInstalle
 
 # Virtual environment
 venv/
@@ -35,3 +33,23 @@ Thumbs.db
 # Temporary files
 *.log
 *.tmp
+
+# Testing
+.coverage
+.pytest_cache/
+.tox/
+.cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Generated plots/images (if any)
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# Application data
+*.csv
+data/
