@@ -479,10 +479,17 @@ def get_html():
             cursor: pointer;
             font-size: 14px;
             transition: background 0.3s;
+            white-space: nowrap;
         }
         
         .browser-header button:hover {
             background: #5568d3;
+        }
+        
+        .path-input-container {
+            flex: 1;
+            display: flex;
+            gap: 5px;
         }
         
         .current-path {
@@ -493,6 +500,21 @@ def get_html():
             border-radius: 5px;
             font-family: monospace;
             font-size: 13px;
+        }
+        
+        .go-btn {
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        
+        .go-btn:hover {
+            background: #45a049;
         }
         
         .folder-list {
@@ -775,7 +797,10 @@ def get_html():
                 <div class="browser-header">
                     <button onclick="goToParent()">⬆️ 上一層</button>
                     <button onclick="goToHome()">🏠 Home</button>
-                    <input type="text" class="current-path" id="currentPath" readonly>
+                    <div class="path-input-container">
+                        <input type="text" class="current-path" id="currentPath" placeholder="輸入資料夾路徑...">
+                        <button class="go-btn" onclick="goToPath()">前往</button>
+                    </div>
                 </div>
                 <div class="folder-list" id="folderList"></div>
             </div>
@@ -915,6 +940,16 @@ def get_html():
         
         function goToHome() {
             loadFolders();
+        }
+        
+        function goToPath() {
+            const pathInput = document.getElementById('currentPath');
+            const path = pathInput.value.trim();
+            if (path) {
+                loadFolders(path);
+            } else {
+                showStatus('請輸入有效的資料夾路徑', 'error');
+            }
         }
         
         function showStatus(message, type = 'info') {
@@ -1080,6 +1115,14 @@ def get_html():
         // Initialize when window is ready
         window.addEventListener('pywebviewready', function() {
             loadFolders();
+            
+            // Add Enter key support for path input
+            const pathInput = document.getElementById('currentPath');
+            pathInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    goToPath();
+                }
+            });
         });
     </script>
 </body>
