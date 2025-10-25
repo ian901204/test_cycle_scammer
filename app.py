@@ -58,12 +58,18 @@ class API:
             for item in os.listdir(path):
                 full_path = os.path.join(path, item)
                 if os.path.isdir(full_path) and not item.startswith('.'):
+                    try:
+                        mtime = os.path.getmtime(full_path)
+                    except:
+                        mtime = 0
                     items.append({
                         'name': item,
                         'path': full_path,
-                        'isDirectory': True
+                        'isDirectory': True,
+                        'mtime': mtime
                     })
-            items.sort(key=lambda x: x['name'].lower())
+            # Sort by modification time (newest first)
+            items.sort(key=lambda x: x['mtime'], reverse=True)
             return {
                 'success': True,
                 'currentPath': path,
