@@ -118,6 +118,8 @@ def run_analysis():
     
     # Process each board and channel
     board_data = {}
+    skipped_channels = []
+    
     for board in board_ch_csv_list:
         board_data[board] = {}
         for ch in board_ch_csv_list[board]:
@@ -133,14 +135,31 @@ def run_analysis():
                     ith.append(temp_summary[test_cycle]["ith"])
                 board_data[board][ch] = {"vf": vf, "pf": pf, "ith": ith}
             except Exception as e:
-                messagebox.showerror("Error", f"Error processing Board {board} Channel {ch}: {str(e)}")
+                # Skip problematic channel and continue
+                skipped_channels.append(f"Board {board} Channel {ch}")
+                print(f"Warning: Skipping Board {board} Channel {ch} due to error: {str(e)}")
+                continue
+    
+    # Remove empty boards
+    board_data = {board: channels for board, channels in board_data.items() if channels}
+    
+    if not board_data:
+        messagebox.showerror("Error", f"No valid data found. All channels failed.")
+        return
     
     from plotter import plot_basic
     # For simplicity, plot data from first board
     if board_data:
         first_board = sorted(board_data.keys())[0]
         plot_basic(board_data[first_board])
-    messagebox.showinfo("Success", f"Analysis completed! Found {len(board_data)} boards")
+    
+    success_msg = f"Analysis completed! Found {len(board_data)} boards"
+    if skipped_channels:
+        success_msg += f"\n\n⚠️ Skipped {len(skipped_channels)} problematic channels:\n" + "\n".join(skipped_channels[:5])
+        if len(skipped_channels) > 5:
+            success_msg += f"\n... and {len(skipped_channels) - 5} more"
+    
+    messagebox.showinfo("Success", success_msg)
 
 if __name__ == "__main__":
     root = tk.Tk()

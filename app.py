@@ -376,23 +376,40 @@ class API:
             
             # Collect data for all boards and channels
             self.boards_data = {}
+            skipped_channels = []  # Track skipped channels
+            
             for board in sorted(board_ch_csv_list.keys()):
                 self.boards_data[board] = {}
                 for ch in sorted(board_ch_csv_list[board].keys()):
-                    temp_summary = collect_data_with_test_cycle({i: board_ch_csv_list[board][ch][i] for i in range(1, 6)})
-                    vf = []
-                    pf = []
-                    ith = []
-                    for test_cycle in range(1, 6):
-                        vf.append(temp_summary[test_cycle]["Vf"])
-                        pf.append(temp_summary[test_cycle]["Pf"])
-                        ith.append(temp_summary[test_cycle]["ith"])
-                    
-                    self.boards_data[board][ch] = {
-                        'vf': vf,
-                        'pf': pf,
-                        'ith': ith
-                    }
+                    try:
+                        temp_summary = collect_data_with_test_cycle({i: board_ch_csv_list[board][ch][i] for i in range(1, 6)})
+                        vf = []
+                        pf = []
+                        ith = []
+                        for test_cycle in range(1, 6):
+                            vf.append(temp_summary[test_cycle]["Vf"])
+                            pf.append(temp_summary[test_cycle]["Pf"])
+                            ith.append(temp_summary[test_cycle]["ith"])
+                        
+                        self.boards_data[board][ch] = {
+                            'vf': vf,
+                            'pf': pf,
+                            'ith': ith
+                        }
+                    except Exception as e:
+                        # Skip problematic channel and continue
+                        skipped_channels.append(f'Board {board} - Channel {ch}: {str(e)}')
+                        print(f"Warning: Skipping Board {board} - Channel {ch} due to error: {str(e)}")
+                        continue
+            
+            # Remove empty boards (all channels failed)
+            self.boards_data = {board: channels for board, channels in self.boards_data.items() if channels}
+            
+            if not self.boards_data:
+                return {
+                    'success': False,
+                    'error': f'No valid data found. Skipped channels:\n' + '\n'.join(skipped_channels[:10])
+                }
             
             # Set first board as default for display
             first_board = sorted(self.boards_data.keys())[0]
@@ -401,13 +418,20 @@ class API:
             # Generate plot for all channels of first board
             plot_image = self._generate_all_channels_plot()
             
-            return {
+            result = {
                 'success': True,
                 'plot': plot_image,
                 'boards': list(self.boards_data.keys()),
                 'channels': list(self.channels_data.keys()),
                 'currentBoard': first_board
             }
+            
+            # Add warning message if any channels were skipped
+            if skipped_channels:
+                result['warning'] = f'跳過 {len(skipped_channels)} 個有問題的通道'
+                result['skippedChannels'] = skipped_channels
+            
+            return result
             
         except Exception as e:
             import traceback
@@ -985,7 +1009,15 @@ def get_html():
                 const data = await pywebview.api.analyze();
                 
                 if (data.success) {
-                    showStatus(`分析完成！找到 ${data.boards.length} 個 Boards, ${data.channels.length} 個通道`, 'success');
+                    let statusMsg = `分析完成！找到 ${data.boards.length} 個 Boards, ${data.channels.length} 個通道`;
+                    
+                    // Show warning if any channels were skipped
+                    if (data.warning) {
+                        statusMsg += ` (⚠️ ${data.warning})`;
+                        console.log('Skipped channels:', data.skippedChannels);
+                    }
+                    
+                    showStatus(statusMsg, 'success');
                     
                     // Show board selector
                     const boardSelector = document.getElementById('boardSelector');
