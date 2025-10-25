@@ -9,15 +9,49 @@ import io
 import base64
 import numpy as np
 
+# File to store last visited path
+LAST_PATH_FILE = os.path.join(os.path.expanduser('~'), '.test_cycle_analyzer_last_path.json')
+
 class API:
     def __init__(self):
         self.selected_folders = []
-        self.channels_data = {}  # Store analyzed data for all channels
+        self.boards_data = {}  # Store analyzed data for all boards -> channels
+        self.channels_data = {}  # Store analyzed data for current board's channels
+        self.last_browsed_path = None
+        
+    def get_initial_path(self):
+        """Get the initial path to load"""
+        try:
+            if os.path.exists(LAST_PATH_FILE):
+                with open(LAST_PATH_FILE, 'r') as f:
+                    data = json.load(f)
+                    last_path = data.get('last_path')
+                    if last_path and os.path.exists(last_path):
+                        # Return parent directory of last path
+                        parent_path = os.path.dirname(last_path)
+                        if os.path.exists(parent_path):
+                            return parent_path
+        except Exception as e:
+            print(f"Error reading last path: {e}")
+        return os.path.expanduser('~')
+    
+    def save_last_path(self, path):
+        """Save the last browsed path"""
+        try:
+            with open(LAST_PATH_FILE, 'w') as f:
+                json.dump({'last_path': path}, f)
+        except Exception as e:
+            print(f"Error saving last path: {e}")
         
     def list_folders(self, path=None):
         """List folders in a given directory"""
         if path is None:
-            path = os.path.expanduser('~')
+            path = self.get_initial_path()
+        
+        # Save the current path
+        if path and os.path.isdir(path):
+            self.last_browsed_path = path
+            self.save_last_path(path)
         
         try:
             items = []
@@ -98,6 +132,7 @@ class API:
         axs[0].set_title(f'Pf over Test (Mean: {overall_mean_pf:.2f} ± {overall_std_pf:.2f})')
         axs[0].set_xlabel('Test Cycle')
         axs[0].set_ylabel('Pf')
+        axs[0].set_xlim(0.5, 5.5)
         axs[0].grid(True, alpha=0.3)
         axs[0].axhline(y=overall_mean_pf, color='red', linestyle='--', alpha=0.5, label='Overall Mean')
         axs[0].axhline(y=overall_mean_pf + 2*overall_std_pf, color='orange', linestyle=':', alpha=0.5, label='±2σ')
@@ -107,6 +142,7 @@ class API:
         axs[1].set_title(f'Vf over Test (Mean: {overall_mean_vf:.2f} ± {overall_std_vf:.2f})')
         axs[1].set_xlabel('Test Cycle')
         axs[1].set_ylabel('Vf')
+        axs[1].set_xlim(0.5, 5.5)
         axs[1].grid(True, alpha=0.3)
         axs[1].axhline(y=overall_mean_vf, color='red', linestyle='--', alpha=0.5, label='Overall Mean')
         axs[1].axhline(y=overall_mean_vf + 2*overall_std_vf, color='orange', linestyle=':', alpha=0.5, label='±2σ')
@@ -116,6 +152,7 @@ class API:
         axs[2].set_title(f'Ith over Test (Mean: {overall_mean_ith:.2f} ± {overall_std_ith:.2f})')
         axs[2].set_xlabel('Test Cycle')
         axs[2].set_ylabel('Ith')
+        axs[2].set_xlim(0.5, 5.5)
         axs[2].grid(True, alpha=0.3)
         axs[2].axhline(y=overall_mean_ith, color='red', linestyle='--', alpha=0.5, label='Overall Mean')
         axs[2].axhline(y=overall_mean_ith + 2*overall_std_ith, color='orange', linestyle=':', alpha=0.5, label='±2σ')
@@ -270,6 +307,29 @@ class API:
             import traceback
             return {'success': False, 'error': f'{str(e)}\n{traceback.format_exc()}'}
     
+    def select_board(self, board):
+        """Switch to a specific board"""
+        try:
+            board_num = int(board)
+            if board_num not in self.boards_data:
+                return {'success': False, 'error': f'Board {board} not found'}
+            
+            # Update current channels_data to selected board
+            self.channels_data = self.boards_data[board_num]
+            
+            # Generate plot for all channels of this board
+            plot_image = self._generate_all_channels_plot()
+            
+            return {
+                'success': True,
+                'plot': plot_image,
+                'channels': list(self.channels_data.keys()),
+                'currentBoard': board_num
+            }
+        except Exception as e:
+            import traceback
+            return {'success': False, 'error': f'{str(e)}\n{traceback.format_exc()}'}
+    
     def analyze(self):
         """Analyze the selected folders"""
         folders = self.selected_folders
@@ -278,7 +338,7 @@ class API:
             return {'success': False, 'error': 'Need exactly 5 folders'}
         
         try:
-            ch_csv_list = {}
+            board_ch_csv_list = {}  # {board: {ch: [csv_paths]}}
             for test_cycle in range(1, 6):
                 folder_path = folders[test_cycle - 1]
                 subfolder = os.path.join(folder_path, f"{os.path.basename(folder_path)}-1")
@@ -297,36 +357,50 @@ class API:
                     }
                 
                 for ch_csv in csv_files:
+                    # Extract board number
+                    board = (ch_csv.split("_")[0][5:])
+                    # Extract channel number
                     ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
-                    if ch not in ch_csv_list:
-                        ch_csv_list[ch] = [None]
-                    ch_csv_list[ch].append(os.path.join(subfolder, ch_csv))
+                    
+                    if board not in board_ch_csv_list:
+                        board_ch_csv_list[board] = {}
+                    if ch not in board_ch_csv_list[board]:
+                        board_ch_csv_list[board][ch] = [None]
+                    board_ch_csv_list[board][ch].append(os.path.join(subfolder, ch_csv))
             
-            # Collect data for all channels
-            self.channels_data = {}
-            for ch in sorted(ch_csv_list.keys()):
-                temp_summary = collect_data_with_test_cycle({i: ch_csv_list[ch][i] for i in range(1, 6)})
-                vf = []
-                pf = []
-                ith = []
-                for test_cycle in range(1, 6):
-                    vf.append(temp_summary[test_cycle]["Vf"])
-                    pf.append(temp_summary[test_cycle]["Pf"])
-                    ith.append(temp_summary[test_cycle]["ith"])
-                
-                self.channels_data[ch] = {
-                    'vf': vf,
-                    'pf': pf,
-                    'ith': ith
-                }
+            # Collect data for all boards and channels
+            self.boards_data = {}
+            for board in sorted(board_ch_csv_list.keys()):
+                self.boards_data[board] = {}
+                for ch in sorted(board_ch_csv_list[board].keys()):
+                    temp_summary = collect_data_with_test_cycle({i: board_ch_csv_list[board][ch][i] for i in range(1, 6)})
+                    vf = []
+                    pf = []
+                    ith = []
+                    for test_cycle in range(1, 6):
+                        vf.append(temp_summary[test_cycle]["Vf"])
+                        pf.append(temp_summary[test_cycle]["Pf"])
+                        ith.append(temp_summary[test_cycle]["ith"])
+                    
+                    self.boards_data[board][ch] = {
+                        'vf': vf,
+                        'pf': pf,
+                        'ith': ith
+                    }
             
-            # Generate plot for all channels
+            # Set first board as default for display
+            first_board = sorted(self.boards_data.keys())[0]
+            self.channels_data = self.boards_data[first_board]
+            
+            # Generate plot for all channels of first board
             plot_image = self._generate_all_channels_plot()
             
             return {
                 'success': True,
                 'plot': plot_image,
-                'channels': list(self.channels_data.keys())
+                'boards': list(self.boards_data.keys()),
+                'channels': list(self.channels_data.keys()),
+                'currentBoard': first_board
             }
             
         except Exception as e:
@@ -576,6 +650,45 @@ def get_html():
             color: #333;
         }
         
+        .board-selector {
+            margin: 20px 0;
+            padding: 20px;
+            background: #fff3e0;
+            border-radius: 10px;
+            display: none;
+        }
+        
+        .board-selector.show {
+            display: block;
+        }
+        
+        .board-selector h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .selector-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .selector-row label {
+            font-weight: 600;
+            min-width: 80px;
+        }
+        
+        .selector-row select {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            background: white;
+        }
+        
         .channel-buttons {
             display: flex;
             flex-wrap: wrap;
@@ -677,6 +790,15 @@ def get_html():
             <div class="action-buttons">
                 <button class="btn btn-secondary" onclick="clearSelection()">清除全部</button>
                 <button class="btn btn-primary" id="analyzeBtn" onclick="analyze()" disabled>開始分析</button>
+            </div>
+            
+            <div class="board-selector" id="boardSelector">
+                <h3>📋 選擇 Board</h3>
+                <div class="selector-row">
+                    <label for="boardSelect">Board:</label>
+                    <select id="boardSelect" onchange="onBoardChange()">
+                    </select>
+                </div>
             </div>
             
             <div class="channel-selector" id="channelSelector">
@@ -822,36 +944,36 @@ def get_html():
                 const data = await pywebview.api.analyze();
                 
                 if (data.success) {
-                    showStatus(`分析完成！找到 ${data.channels.length} 個通道`, 'success');
+                    showStatus(`分析完成！找到 ${data.boards.length} 個 Boards, ${data.channels.length} 個通道`, 'success');
+                    
+                    // Show board selector
+                    const boardSelector = document.getElementById('boardSelector');
+                    boardSelector.classList.add('show');
+                    
+                    // Populate board dropdown
+                    const boardSelect = document.getElementById('boardSelect');
+                    boardSelect.innerHTML = '';
+                    data.boards.forEach(board => {
+                        const option = document.createElement('option');
+                        option.value = board;
+                        option.textContent = `Board ${board}`;
+                        if (board === data.currentBoard) {
+                            option.selected = true;
+                        }
+                        boardSelect.appendChild(option);
+                    });
                     
                     // Show channel selector
                     const channelSelector = document.getElementById('channelSelector');
                     channelSelector.classList.add('show');
                     
                     // Create channel buttons
-                    const channelButtons = document.getElementById('channelButtons');
-                    channelButtons.innerHTML = '';
+                    updateChannelButtons(data.channels);
                     
-                    // Add "All Channels" button
-                    const allBtn = document.createElement('button');
-                    allBtn.className = 'channel-btn active';
-                    allBtn.textContent = '所有通道';
-                    allBtn.onclick = () => selectChannel('all');
-                    channelButtons.appendChild(allBtn);
-                    
-                    // Add individual channel buttons
-                    data.channels.forEach(ch => {
-                        const btn = document.createElement('button');
-                        btn.className = 'channel-btn';
-                        btn.textContent = `Channel ${ch}`;
-                        btn.onclick = () => selectChannel(ch);
-                        channelButtons.appendChild(btn);
-                    });
-                    
-                    // Display initial plot (all channels)
+                    // Display initial plot (all channels of current board)
                     results.innerHTML = `
                         <div class="plot-container">
-                            <div class="plot-header">所有通道 (Channels: ${data.channels.join(', ')})</div>
+                            <div class="plot-header">Board ${data.currentBoard} - 所有通道 (Channels: ${data.channels.join(', ')})</div>
                             <img src="${data.plot}" class="plot-image" alt="All channels plot">
                         </div>
                     `;
@@ -862,6 +984,60 @@ def get_html():
             } catch (error) {
                 showStatus('分析數據錯誤: ' + error.message, 'error');
                 results.innerHTML = '';
+            }
+        }
+        
+        function updateChannelButtons(channels) {
+            const channelButtons = document.getElementById('channelButtons');
+            channelButtons.innerHTML = '';
+            
+            // Add "All Channels" button
+            const allBtn = document.createElement('button');
+            allBtn.className = 'channel-btn active';
+            allBtn.textContent = '所有通道';
+            allBtn.onclick = () => selectChannel('all');
+            channelButtons.appendChild(allBtn);
+            
+            // Add individual channel buttons
+            channels.forEach(ch => {
+                const btn = document.createElement('button');
+                btn.className = 'channel-btn';
+                btn.textContent = `Channel ${ch}`;
+                btn.onclick = () => selectChannel(ch);
+                channelButtons.appendChild(btn);
+            });
+        }
+        
+        async function onBoardChange() {
+            const boardSelect = document.getElementById('boardSelect');
+            const selectedBoard = boardSelect.value;
+            
+            const results = document.getElementById('results');
+            results.innerHTML = '<div class="loading"><div class="spinner"></div><p>切換 Board 中...</p></div>';
+            showStatus('載入 Board 數據中...', 'info');
+            
+            try {
+                const data = await pywebview.api.select_board(selectedBoard);
+                
+                if (data.success) {
+                    showStatus(`已切換到 Board ${selectedBoard}`, 'success');
+                    
+                    // Update channel buttons
+                    updateChannelButtons(data.channels);
+                    
+                    // Display plot for all channels of new board
+                    results.innerHTML = `
+                        <div class="plot-container">
+                            <div class="plot-header">Board ${selectedBoard} - 所有通道 (Channels: ${data.channels.join(', ')})</div>
+                            <img src="${data.plot}" class="plot-image" alt="All channels plot">
+                        </div>
+                    `;
+                } else {
+                    showStatus('錯誤: ' + data.error, 'error');
+                    results.innerHTML = '';
+                }
+            } catch (error) {
+                showStatus('切換 Board 錯誤: ' + error.message, 'error');
             }
         }
         
@@ -884,7 +1060,9 @@ def get_html():
                 const data = await pywebview.api.plot_channel(channel);
                 
                 if (data.success) {
-                    const title = channel === 'all' ? '所有通道' : `Channel ${channel}`;
+                    const boardSelect = document.getElementById('boardSelect');
+                    const currentBoard = boardSelect.value;
+                    const title = channel === 'all' ? `Board ${currentBoard} - 所有通道` : `Board ${currentBoard} - Channel ${channel}`;
                     results.innerHTML = `
                         <div class="plot-container">
                             <div class="plot-header">${title}</div>
@@ -917,4 +1095,4 @@ if __name__ == '__main__':
         width=1200,
         height=900
     )
-    webview.start(debug=True)
+    webview.start(debug=False)

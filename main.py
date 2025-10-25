@@ -89,7 +89,7 @@ def run_analysis():
         messagebox.showerror("Error", "Need exactly 5 folders")
         return
     
-    ch_csv_list = {}
+    board_ch_csv_list = {}  # {board: {ch: [csv_paths]}}
     for test_cycle in range(1, 6):
         folder_path = test_cycle_folders[test_cycle - 1]
         subfolder = os.path.join(folder_path, f"{os.path.basename(folder_path)}-1")
@@ -102,33 +102,45 @@ def run_analysis():
                 messagebox.showerror("Error", f"No CSV files found in {subfolder}")
                 return
             for ch_csv in csv_files:
+                # Extract board number
+                board = int(ch_csv.split("_")[0][5:])
+                # Extract channel number
                 ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
-                if ch not in ch_csv_list:
-                    ch_csv_list[ch] = [None]
-                ch_csv_list[ch].append(os.path.join(subfolder, ch_csv))
+                
+                if board not in board_ch_csv_list:
+                    board_ch_csv_list[board] = {}
+                if ch not in board_ch_csv_list[board]:
+                    board_ch_csv_list[board][ch] = [None]
+                board_ch_csv_list[board][ch].append(os.path.join(subfolder, ch_csv))
         except Exception as e:
             messagebox.showerror("Error", f"Error processing folder for Test Cycle {test_cycle}: {str(e)}")
             return
     
-    # Process each channel
-    ch_data = {}
-    for ch in ch_csv_list:
-        try:
-            from scan import collect_data_with_test_cycle
-            temp_summary = collect_data_with_test_cycle({i: ch_csv_list[ch][i] for i in range(1, 6)})
-            vf = []
-            pf = []
-            ith = []
-            for test_cycle in range(1, 6):
-                vf.append(temp_summary[test_cycle]["Vf"])
-                pf.append(temp_summary[test_cycle]["Pf"])
-                ith.append(temp_summary[test_cycle]["ith"])
-            from plotter import plot_basic
-            ch_data[ch] = {"vf": vf, "pf": pf, "ith": ith}
-        except Exception as e:
-            messagebox.showerror("Error", f"Error processing channel {ch}: {str(e)}")
-    plot_basic(ch_data)
-    messagebox.showinfo("Success", "Analysis completed!")
+    # Process each board and channel
+    board_data = {}
+    for board in board_ch_csv_list:
+        board_data[board] = {}
+        for ch in board_ch_csv_list[board]:
+            try:
+                from scan import collect_data_with_test_cycle
+                temp_summary = collect_data_with_test_cycle({i: board_ch_csv_list[board][ch][i] for i in range(1, 6)})
+                vf = []
+                pf = []
+                ith = []
+                for test_cycle in range(1, 6):
+                    vf.append(temp_summary[test_cycle]["Vf"])
+                    pf.append(temp_summary[test_cycle]["Pf"])
+                    ith.append(temp_summary[test_cycle]["ith"])
+                board_data[board][ch] = {"vf": vf, "pf": pf, "ith": ith}
+            except Exception as e:
+                messagebox.showerror("Error", f"Error processing Board {board} Channel {ch}: {str(e)}")
+    
+    from plotter import plot_basic
+    # For simplicity, plot data from first board
+    if board_data:
+        first_board = sorted(board_data.keys())[0]
+        plot_basic(board_data[first_board])
+    messagebox.showinfo("Success", f"Analysis completed! Found {len(board_data)} boards")
 
 if __name__ == "__main__":
     root = tk.Tk()
