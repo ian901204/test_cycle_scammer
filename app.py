@@ -985,10 +985,6 @@ def get_html():
                 displayFolders(filtered);
             }
         }
-            } catch (error) {
-                showStatus('載入資料夾錯誤: ' + error.message, 'error');
-            }
-        }
         
         async function toggleSelection(path) {
             const index = selectedFolders.indexOf(path);
