@@ -577,35 +577,6 @@ def get_html():
             min-height: 200px;
         }
         
-        .folder-loading {
-            display: none;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            z-index: 10;
-        }
-        
-        .folder-loading.show {
-            display: block;
-        }
-        
-        .folder-loading .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-        
-        .folder-list.loading {
-            opacity: 0.3;
-            pointer-events: none;
-        }
-        
         .folder-item {
             padding: 12px 15px;
             border-bottom: 1px solid #f0f0f0;
@@ -889,12 +860,7 @@ def get_html():
                 <div class="search-container">
                     <input type="text" class="search-box" id="searchBox" placeholder="🔍 搜尋資料夾名稱...">
                 </div>
-                <div class="folder-list" id="folderList">
-                    <div class="folder-loading" id="folderLoading">
-                        <div class="spinner"></div>
-                        <p>載入中...</p>
-                    </div>
-                </div>
+                <div class="folder-list" id="folderList"></div>
             </div>
             
             <div class="selected-folders">
@@ -933,11 +899,10 @@ def get_html():
         let allFolderItems = [];  // Store all folder items for searching
         
         async function loadFolders(path = null) {
-            // Show loading
-            showFolderLoading(true);
-            
             try {
+                console.log('Loading folders for path:', path);
                 const data = await pywebview.api.list_folders(path);
+                console.log('API response:', data);
                 
                 if (data.success) {
                     currentPath = data.currentPath;
@@ -951,37 +916,30 @@ def get_html():
                     
                     // Display all folders
                     displayFolders(allFolderItems);
+                    
+                    // Clear any previous error status
+                    if (data.items.length === 0) {
+                        showStatus('此資料夾為空', 'info');
+                    } else {
+                        const statusEl = document.getElementById('status');
+                        statusEl.style.display = 'none';
+                    }
                 } else {
+                    console.error('Error loading folders:', data.error);
                     showStatus('載入資料夾錯誤: ' + data.error, 'error');
+                    // Keep the current path in the input
                 }
             } catch (error) {
+                console.error('Exception loading folders:', error);
                 showStatus('載入資料夾錯誤: ' + error.message, 'error');
-            } finally {
-                // Hide loading
-                showFolderLoading(false);
-            }
-        }
-        
-        function showFolderLoading(show) {
-            const loading = document.getElementById('folderLoading');
-            const folderList = document.getElementById('folderList');
-            
-            if (show) {
-                loading.classList.add('show');
-                folderList.classList.add('loading');
-            } else {
-                loading.classList.remove('show');
-                folderList.classList.remove('loading');
             }
         }
         
         function displayFolders(items) {
             const folderList = document.getElementById('folderList');
             
-            // Clear all items except loading indicator
-            const loading = document.getElementById('folderLoading');
+            // Clear all items
             folderList.innerHTML = '';
-            folderList.appendChild(loading);
             
             items.forEach(item => {
                 const div = document.createElement('div');
@@ -1096,6 +1054,7 @@ def get_html():
             const pathInput = document.getElementById('currentPath');
             const path = pathInput.value.trim();
             if (path) {
+                showStatus('正在前往路徑...', 'info');
                 loadFolders(path);
             } else {
                 showStatus('請輸入有效的資料夾路徑', 'error');
