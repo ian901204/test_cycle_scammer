@@ -45,15 +45,22 @@ class API:
         
     def list_folders(self, path=None):
         """List folders in a given directory"""
+        print(f"[list_folders] Called with path: {path}")
+        
         if path is None:
             path = self.get_initial_path()
+            print(f"[list_folders] Using initial path: {path}")
         
         # Save the current path
         if path and os.path.isdir(path):
             self.last_browsed_path = path
             self.save_last_path(path)
+            print(f"[list_folders] Path is valid directory, saved")
+        else:
+            print(f"[list_folders] Path is not a valid directory: {path}")
         
         try:
+            print(f"[list_folders] Attempting to list directory: {path}")
             items = []
             for item in os.listdir(path):
                 full_path = os.path.join(path, item)
@@ -70,6 +77,7 @@ class API:
                     })
             # Sort by modification time (newest first)
             items.sort(key=lambda x: x['mtime'], reverse=True)
+            print(f"[list_folders] Found {len(items)} folders")
             return {
                 'success': True,
                 'currentPath': path,
@@ -77,6 +85,9 @@ class API:
                 'items': items
             }
         except Exception as e:
+            print(f"[list_folders] Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
     
     def select_folder(self, path):
@@ -854,7 +865,7 @@ def get_html():
                     <button onclick="goToHome()">🏠 Home</button>
                     <div class="path-input-container">
                         <input type="text" class="current-path" id="currentPath" placeholder="輸入資料夾路徑...">
-                        <button class="go-btn" onclick="goToPath()">前往</button>
+                        <button class="go-btn" onclick="console.log('Button clicked'); goToPath();">前往</button>
                     </div>
                 </div>
                 <div class="search-container">
@@ -1051,12 +1062,18 @@ def get_html():
         }
         
         function goToPath() {
+            console.log('goToPath called');
             const pathInput = document.getElementById('currentPath');
+            console.log('pathInput element:', pathInput);
             const path = pathInput.value.trim();
+            console.log('path value:', path);
+            
             if (path) {
                 showStatus('正在前往路徑...', 'info');
+                console.log('calling loadFolders with path:', path);
                 loadFolders(path);
             } else {
+                console.log('path is empty');
                 showStatus('請輸入有效的資料夾路徑', 'error');
             }
         }
@@ -1259,4 +1276,4 @@ if __name__ == '__main__':
         width=1200,
         height=900
     )
-    webview.start(debug=False)
+    webview.start(debug=True)
