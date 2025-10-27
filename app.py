@@ -573,6 +573,37 @@ def get_html():
         .folder-list {
             max-height: 400px;
             overflow-y: auto;
+            position: relative;
+            min-height: 200px;
+        }
+        
+        .folder-loading {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+        }
+        
+        .folder-loading.show {
+            display: block;
+        }
+        
+        .folder-loading .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        .folder-list.loading {
+            opacity: 0.3;
+            pointer-events: none;
         }
         
         .folder-item {
@@ -858,7 +889,12 @@ def get_html():
                 <div class="search-container">
                     <input type="text" class="search-box" id="searchBox" placeholder="🔍 搜尋資料夾名稱...">
                 </div>
-                <div class="folder-list" id="folderList"></div>
+                <div class="folder-list" id="folderList">
+                    <div class="folder-loading" id="folderLoading">
+                        <div class="spinner"></div>
+                        <p>載入中...</p>
+                    </div>
+                </div>
             </div>
             
             <div class="selected-folders">
@@ -897,6 +933,9 @@ def get_html():
         let allFolderItems = [];  // Store all folder items for searching
         
         async function loadFolders(path = null) {
+            // Show loading
+            showFolderLoading(true);
+            
             try {
                 const data = await pywebview.api.list_folders(path);
                 
@@ -917,12 +956,32 @@ def get_html():
                 }
             } catch (error) {
                 showStatus('載入資料夾錯誤: ' + error.message, 'error');
+            } finally {
+                // Hide loading
+                showFolderLoading(false);
+            }
+        }
+        
+        function showFolderLoading(show) {
+            const loading = document.getElementById('folderLoading');
+            const folderList = document.getElementById('folderList');
+            
+            if (show) {
+                loading.classList.add('show');
+                folderList.classList.add('loading');
+            } else {
+                loading.classList.remove('show');
+                folderList.classList.remove('loading');
             }
         }
         
         function displayFolders(items) {
             const folderList = document.getElementById('folderList');
+            
+            // Clear all items except loading indicator
+            const loading = document.getElementById('folderLoading');
             folderList.innerHTML = '';
+            folderList.appendChild(loading);
             
             items.forEach(item => {
                 const div = document.createElement('div');
