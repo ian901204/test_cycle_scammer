@@ -102,8 +102,8 @@ def run_analysis():
                 messagebox.showerror("Error", f"No CSV files found in {subfolder}")
                 return
             for ch_csv in csv_files:
-                # Extract board number
-                board = int(ch_csv.split("_")[0][5:])
+                # Extract board (as string)
+                board = ch_csv.split("_")[0][5:]
                 # Extract channel number
                 ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
                 

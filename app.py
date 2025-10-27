@@ -316,12 +316,12 @@ class API:
     def select_board(self, board):
         """Switch to a specific board"""
         try:
-            board_num = int(board)
-            if board_num not in self.boards_data:
+            # board is a string, no need to convert
+            if board not in self.boards_data:
                 return {'success': False, 'error': f'Board {board} not found'}
             
             # Update current channels_data to selected board
-            self.channels_data = self.boards_data[board_num]
+            self.channels_data = self.boards_data[board]
             
             # Generate plot for all channels of this board
             plot_image = self._generate_all_channels_plot()
@@ -330,7 +330,7 @@ class API:
                 'success': True,
                 'plot': plot_image,
                 'channels': list(self.channels_data.keys()),
-                'currentBoard': board_num
+                'currentBoard': board
             }
         except Exception as e:
             import traceback
@@ -363,16 +363,20 @@ class API:
                     }
                 
                 for ch_csv in csv_files:
-                    # Extract board number
-                    board = (ch_csv.split("_")[0][5:])
-                    # Extract channel number
-                    ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
-                    
-                    if board not in board_ch_csv_list:
-                        board_ch_csv_list[board] = {}
-                    if ch not in board_ch_csv_list[board]:
-                        board_ch_csv_list[board][ch] = [None]
-                    board_ch_csv_list[board][ch].append(os.path.join(subfolder, ch_csv))
+                    try:
+                        # Extract board (as string)
+                        board = ch_csv.split("_")[0][5:]
+                        # Extract channel number
+                        ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
+                        
+                        if board not in board_ch_csv_list:
+                            board_ch_csv_list[board] = {}
+                        if ch not in board_ch_csv_list[board]:
+                            board_ch_csv_list[board][ch] = [None]
+                        board_ch_csv_list[board][ch].append(os.path.join(subfolder, ch_csv))
+                    except (ValueError, IndexError) as e:
+                        print(f"Warning: Skipping invalid CSV filename: {ch_csv}")
+                        continue
             
             # Collect data for all boards and channels
             self.boards_data = {}
@@ -545,6 +549,25 @@ def get_html():
         
         .go-btn:hover {
             background: #45a049;
+        }
+        
+        .search-container {
+            padding: 10px 15px;
+            background: #f9f9f9;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .search-box {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .search-box:focus {
+            outline: none;
+            border-color: #667eea;
         }
         
         .folder-list {
@@ -832,6 +855,9 @@ def get_html():
                         <button class="go-btn" onclick="goToPath()">前往</button>
                     </div>
                 </div>
+                <div class="search-container">
+                    <input type="text" class="search-box" id="searchBox" placeholder="🔍 搜尋資料夾名稱...">
+                </div>
                 <div class="folder-list" id="folderList"></div>
             </div>
             
@@ -868,6 +894,7 @@ def get_html():
     <script>
         let currentPath = '';
         let selectedFolders = [];
+        let allFolderItems = [];  // Store all folder items for searching
         
         async function loadFolders(path = null) {
             try {
@@ -877,31 +904,59 @@ def get_html():
                     currentPath = data.currentPath;
                     document.getElementById('currentPath').value = currentPath;
                     
-                    const folderList = document.getElementById('folderList');
-                    folderList.innerHTML = '';
+                    // Store all items for searching
+                    allFolderItems = data.items;
                     
-                    data.items.forEach(item => {
-                        const div = document.createElement('div');
-                        div.className = 'folder-item';
-                        div.innerHTML = `<span class="folder-icon">📁</span><span>${item.name}</span>`;
-                        
-                        div.onclick = (e) => {
-                            if (e.detail === 1) {
-                                toggleSelection(item.path);
-                            } else if (e.detail === 2) {
-                                loadFolders(item.path);
-                            }
-                        };
-                        
-                        if (selectedFolders.includes(item.path)) {
-                            div.classList.add('selected');
-                        }
-                        
-                        folderList.appendChild(div);
-                    });
+                    // Clear search box
+                    document.getElementById('searchBox').value = '';
+                    
+                    // Display all folders
+                    displayFolders(allFolderItems);
                 } else {
                     showStatus('載入資料夾錯誤: ' + data.error, 'error');
                 }
+            } catch (error) {
+                showStatus('載入資料夾錯誤: ' + error.message, 'error');
+            }
+        }
+        
+        function displayFolders(items) {
+            const folderList = document.getElementById('folderList');
+            folderList.innerHTML = '';
+            
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'folder-item';
+                div.innerHTML = `<span class="folder-icon">📁</span><span>${item.name}</span>`;
+                
+                div.onclick = (e) => {
+                    if (e.detail === 1) {
+                        toggleSelection(item.path);
+                    } else if (e.detail === 2) {
+                        loadFolders(item.path);
+                    }
+                };
+                
+                if (selectedFolders.includes(item.path)) {
+                    div.classList.add('selected');
+                }
+                
+                folderList.appendChild(div);
+            });
+        }
+        
+        function searchFolders() {
+            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+            
+            if (searchTerm === '') {
+                displayFolders(allFolderItems);
+            } else {
+                const filtered = allFolderItems.filter(item => 
+                    item.name.toLowerCase().includes(searchTerm)
+                );
+                displayFolders(filtered);
+            }
+        }
             } catch (error) {
                 showStatus('載入資料夾錯誤: ' + error.message, 'error');
             }
@@ -923,7 +978,13 @@ def get_html():
                 }
             }
             updateSelectedDisplay();
-            loadFolders(currentPath);
+            // Refresh display to show selection state
+            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+            if (searchTerm === '') {
+                displayFolders(allFolderItems);
+            } else {
+                searchFolders();
+            }
         }
         
         function updateSelectedDisplay() {
@@ -1161,6 +1222,10 @@ def get_html():
                     goToPath();
                 }
             });
+            
+            // Add search functionality
+            const searchBox = document.getElementById('searchBox');
+            searchBox.addEventListener('input', searchFolders);
         });
     </script>
 </body>
