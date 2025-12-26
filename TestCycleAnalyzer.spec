@@ -1,6 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
 block_cipher = None
+
+# Collect matplotlib data files
+matplotlib_datas = collect_data_files('matplotlib')
 
 a = Analysis(
     ['app.py'],
@@ -8,7 +13,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('templates', 'templates'),  # Include HTML templates
-    ],
+    ] + matplotlib_datas,
     hiddenimports=[
         'matplotlib',
         'matplotlib.backends.backend_agg',
@@ -34,10 +39,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Collect matplotlib data files
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-a.datas += collect_data_files('matplotlib')
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
