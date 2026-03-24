@@ -1,53 +1,82 @@
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Reusable thread pool for CSV reading - created once, reused across calls
+_executor = None
+
+def _get_executor():
+    global _executor
+    if _executor is None:
+        import os
+        # Use number of CPUs, but cap at 8 to avoid overwhelming the system
+        max_workers = min(os.cpu_count() or 4, 8)
+        _executor = ThreadPoolExecutor(max_workers=max_workers)
+    return _executor
+
+def _read_single_csv(args):
+    """Read a single CSV file and return raw data. Runs in thread pool."""
+    path, test_cycle = args
+    result = {
+        'test_cycle': test_cycle,
+        'cur': [], 'power': [], 'voltage': [],
+        'vf': 0, 'pf': 0, 'date': '', 'ith': 0
+    }
+    try:
+        with open(path, "r") as f:
+            reader = csv.reader(f)
+            data = list(reader)
+            result['date'] = data[1][0].split(" ")[-2]
+            data = data[9:]
+            for row in data:
+                cur_val = float(row[0])
+                power_val = float(row[1])
+                voltage_val = float(row[2])
+                result['cur'].append(cur_val)
+                result['power'].append(power_val)
+                result['voltage'].append(voltage_val)
+                if cur_val == 7.5:
+                    result['vf'] = voltage_val
+                    result['pf'] = power_val
+        # Calculate Ith using linear regression on filtered data (power 100-500)
+        ith_cur = [result['cur'][i] for i in range(len(result['cur'])) if 500 >= result['power'][i] >= 100]
+        ith_pow = [result['power'][i] for i in range(len(result['power'])) if 500 >= result['power'][i] >= 100]
+        ith_corr = CalIth(ith_cur, ith_pow)
+        result['ith'] = -ith_corr[1] / ith_corr[0] if ith_corr[0] != 0 else 0
+    except Exception as e:
+        print(f"Error reading {path}: {e}")
+    return result
+
 
 def collect_data_with_test_cycle(path_list: dict):
-    #this is a path list for multiple files
-    temp_summary = {x:{} for x in range(1,6)}
-    result_summary = {"Cur": [], "Power": [], "Voltage": [], "ith": 0, "ithCor": [0, 0], "Vf": 0, "Pf": 0, "date":"", "fpoint":0}
-    try:
-        for test_cycle in range(1,6):
-            with open(path_list[test_cycle], "r") as f:
-                temp_summary[test_cycle] = {}
-                ithD = {"Cur":[], "Power": []}
-                summary = {"Cur": [], "Power": [], "Voltage": [], "ith": 0, "ithCor": [0, 0], "Vf": 0, "Pf": 0, "date":"", "fpoint":0}
-                reader = csv.reader(f)
-                data = list(reader)
-                summary["date"] = data[1][0].split(" ")[-2]
-                data = data[9:]
-                for row in data:
-                    summary["Cur"].append(float(row[0]))
-                    summary["Power"].append(float(row[1]))
-                    summary["Voltage"].append(float(row[2]))
-                    if float(row[0]) == 7.5:
-                        summary["fpoint"] = float(row[0])
-                        summary["Vf"] = float(row[2])
-                        summary["Pf"] = float(row[1])
-                    if 500 >= float(row[1]) >= 100:
-                        ithD["Cur"].append(float(row[0]))
-                        ithD["Power"].append(float(row[1]))
-                summary["ithCor"] = CalIth(ithD["Cur"], ithD["Power"])
-                summary["ith"] = -summary["ithCor"][1] / summary["ithCor"][0]
-                temp_summary[test_cycle] = summary
-        #start calualte average
-        temp_vf = []
-        temp_pf = []
-        temp_ith = []
-        for test_cycle in range(1,6):
-            temp_vf.append(temp_summary[test_cycle]["Vf"])
-            temp_pf.append(temp_summary[test_cycle]["Pf"])
-            temp_ith.append(temp_summary[test_cycle]["ith"])
-        result_summary["Vf"] = sum(temp_vf)/len(temp_vf)
-        result_summary["Pf"] = sum(temp_pf)/len(temp_pf)
-        result_summary["ith"] = sum(temp_ith)/len(temp_ith)
-        
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File {path_list[test_cycle]} not found.")
-    except Exception as e:
-        print(f"Error reading file {path_list[test_cycle]}: {e.with_traceback()}")
-        result_summary["ith"] = 0
-        result_summary["Vf"] = 0
-        result_summary["Pf"] = 0
-    #as now only use all 5 test cycles test to plot the other code stay until we need it
+    """
+    Read 5 CSV files in parallel using thread pool.
+    path_list: dict with keys 1-5 mapping to file paths.
+    Returns: dict with keys 1-5 containing summary data for each test cycle.
+    """
+    executor = _get_executor()
+
+    # Submit all 5 CSV reads in parallel
+    args_list = [(path_list[tc], tc) for tc in range(1, 6)]
+    futures = {executor.submit(_read_single_csv, args): args for args in args_list}
+
+    temp_summary = {x: {} for x in range(1, 6)}
+
+    # Collect results as they complete
+    for future in as_completed(futures):
+        result = future.result()
+        tc = result['test_cycle']
+        temp_summary[tc] = {
+            'Cur': result['cur'],
+            'Power': result['power'],
+            'Voltage': result['voltage'],
+            'Vf': result['vf'],
+            'Pf': result['pf'],
+            'ith': result['ith'],
+            'date': result['date'],
+            'ithCor': [0, 0],
+            'fpoint': 0
+        }
+
     return temp_summary
 
 

@@ -1,6 +1,8 @@
 import webview
 import os
 import json
+from functools import lru_cache
+import threading
 from scan import collect_data_with_test_cycle
 import matplotlib
 matplotlib.use('Agg')
@@ -12,12 +14,48 @@ import numpy as np
 # File to store last visited path
 LAST_PATH_FILE = os.path.join(os.path.expanduser('~'), '.test_cycle_analyzer_last_path.json')
 
+# Cache for folder listings: {path: {'items': [...], 'timestamp': float}}
+_folder_cache = {}
+_folder_cache_lock = threading.Lock()
+_FOLDER_CACHE_TTL = 5.0  # seconds
+
+
+def _analyze_single_channel(board, ch, path_list):
+    """
+    Analyze a single channel's data. Returns dict with vf, pf, ith lists.
+    This function is designed to run in a thread pool.
+    """
+    try:
+        temp_summary = collect_data_with_test_cycle(path_list)
+        vf = []
+        pf = []
+        ith = []
+        for test_cycle in range(1, 6):
+            vf.append(temp_summary[test_cycle]["Vf"])
+            pf.append(temp_summary[test_cycle]["Pf"])
+            ith.append(temp_summary[test_cycle]["ith"])
+        return {
+            'vf': vf,
+            'pf': pf,
+            'ith': ith
+        }
+    except Exception as e:
+        print(f"Error analyzing board {board} channel {ch}: {e}")
+        return None
+
+
 class API:
     def __init__(self):
         self.selected_folders = []
         self.boards_data = {}  # Store analyzed data for all boards -> channels
         self.channels_data = {}  # Store analyzed data for current board's channels
         self.last_browsed_path = None
+        self._current_board = None  # Track currently selected board for plot caching
+        # Cache for computed statistics (outlier detection data)
+        self._stats_cache = {}  # {(board, ch): {pf_mean, vf_mean, ith_mean, ...}}
+        self._board_stats_cache = {}  # {board: {pf_mean, vf_mean, ith_mean, pf_std, ...}}
+        self._plot_cache = {}  # {(board, channel_str): base64_image}
+        self._cache_version = 0  # Increment when analyze() is called to invalidate plot cache
         
     def get_initial_path(self):
         """Get the initial path to load"""
@@ -44,13 +82,13 @@ class API:
             print(f"Error saving last path: {e}")
         
     def list_folders(self, path=None):
-        """List folders in a given directory"""
+        """List folders in a given directory. Uses scandir for efficiency and caches results."""
         print(f"[list_folders] Called with path: {path}")
-        
+
         if path is None:
             path = self.get_initial_path()
             print(f"[list_folders] Using initial path: {path}")
-        
+
         # Save the current path
         if path and os.path.isdir(path):
             self.last_browsed_path = path
@@ -58,26 +96,55 @@ class API:
             print(f"[list_folders] Path is valid directory, saved")
         else:
             print(f"[list_folders] Path is not a valid directory: {path}")
-        
+
         try:
             print(f"[list_folders] Attempting to list directory: {path}")
+
+            # Check cache first
+            cache_key = path
+            now = None
+            with _folder_cache_lock:
+                if cache_key in _folder_cache:
+                    entry = _folder_cache[cache_key]
+                    if entry is not None:
+                        cached_items, timestamp = entry
+                        now = now or __import__('time').time()
+                        if now - timestamp < _FOLDER_CACHE_TTL:
+                            print(f"[list_folders] Cache hit for {path}")
+                            return {
+                                'success': True,
+                                'currentPath': path,
+                                'parent': os.path.dirname(path) if path != '/' else None,
+                                'items': cached_items
+                            }
+
+            # Use os.scandir() - it provides mtime without extra syscalls via DirEntry.stat()
             items = []
-            for item in os.listdir(path):
-                full_path = os.path.join(path, item)
-                if os.path.isdir(full_path) and not item.startswith('.'):
-                    try:
-                        mtime = os.path.getmtime(full_path)
-                    except:
-                        mtime = 0
-                    items.append({
-                        'name': item,
-                        'path': full_path,
-                        'isDirectory': True,
-                        'mtime': mtime
-                    })
+            try:
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        if entry.is_dir() and not entry.name.startswith('.'):
+                            try:
+                                mtime = entry.stat().st_mtime
+                            except:
+                                mtime = 0
+                            items.append({
+                                'name': entry.name,
+                                'path': entry.path,
+                                'isDirectory': True,
+                                'mtime': mtime
+                            })
+            except PermissionError:
+                return {'success': False, 'error': 'Permission denied'}
+
             # Sort by modification time (newest first)
             items.sort(key=lambda x: x['mtime'], reverse=True)
             print(f"[list_folders] Found {len(items)} folders")
+
+            # Cache the result
+            with _folder_cache_lock:
+                _folder_cache[cache_key] = (items, __import__('time').time())
+
             return {
                 'success': True,
                 'currentPath': path,
@@ -114,36 +181,72 @@ class API:
         self.selected_folders = []
         return {'success': True, 'folders': []}
     
+    def _compute_and_cache_statistics(self):
+        """Compute and cache statistics (mean, std, outliers) for all boards and channels."""
+        self._stats_cache = {}
+        self._board_stats_cache = {}
+
+        for board, channels_data in self.boards_data.items():
+            # Compute per-channel means
+            board_channel_means = {}
+            for ch, data in channels_data.items():
+                board_channel_means[ch] = {
+                    'pf': np.mean(data['pf']),
+                    'vf': np.mean(data['vf']),
+                    'ith': np.mean(data['ith'])
+                }
+
+            # Compute overall stats for this board
+            pf_vals = [m['pf'] for m in board_channel_means.values()]
+            vf_vals = [m['vf'] for m in board_channel_means.values()]
+            ith_vals = [m['ith'] for m in board_channel_means.values()]
+
+            self._board_stats_cache[board] = {
+                'pf_mean': np.mean(pf_vals),
+                'pf_std': np.std(pf_vals),
+                'vf_mean': np.mean(vf_vals),
+                'vf_std': np.std(vf_vals),
+                'ith_mean': np.mean(ith_vals),
+                'ith_std': np.std(ith_vals),
+            }
+
+            # Compute outlier flags for each channel
+            outlier_threshold = 2
+            for ch, means in board_channel_means.items():
+                is_outlier_pf = abs(means['pf'] - self._board_stats_cache[board]['pf_mean']) > outlier_threshold * self._board_stats_cache[board]['pf_std']
+                is_outlier_vf = abs(means['vf'] - self._board_stats_cache[board]['vf_mean']) > outlier_threshold * self._board_stats_cache[board]['vf_std']
+                is_outlier_ith = abs(means['ith'] - self._board_stats_cache[board]['ith_mean']) > outlier_threshold * self._board_stats_cache[board]['ith_std']
+                self._stats_cache[(board, ch)] = {
+                    'is_outlier_pf': is_outlier_pf,
+                    'is_outlier_vf': is_outlier_vf,
+                    'is_outlier_ith': is_outlier_ith,
+                }
+
     def _generate_all_channels_plot(self):
-        """Generate plot with all channels"""
+        """Generate plot with all channels. Uses cached statistics for performance."""
+        current_board = self._current_board or (sorted(self.boards_data.keys())[0] if self.boards_data else None)
+        if current_board is None:
+            return None
+
+        cache_key = (current_board, 'all')
+        cache_ver = self._cache_version
+
+        # Check if we have a cached plot
+        cached = self._plot_cache.get(cache_key)
+        if cached is not None and cached[0] == cache_ver:
+            return cached[1]
+
         test_cycles = [1, 2, 3, 4, 5]
         fig, axs = plt.subplots(3, 1, figsize=(10, 14))
-        
-        # Calculate statistics for outlier detection
-        
-        # Calculate mean for each channel across all test cycles
-        channel_means = {'pf': {}, 'vf': {}, 'ith': {}}
-        for ch in self.channels_data.keys():
-            channel_means['pf'][ch] = np.mean(self.channels_data[ch]['pf'])
-            channel_means['vf'][ch] = np.mean(self.channels_data[ch]['vf'])
-            channel_means['ith'][ch] = np.mean(self.channels_data[ch]['ith'])
-        
-        # Calculate overall mean and std from channel means
-        overall_mean_pf = np.mean(list(channel_means['pf'].values()))
-        overall_std_pf = np.std(list(channel_means['pf'].values()))
-        overall_mean_vf = np.mean(list(channel_means['vf'].values()))
-        overall_std_vf = np.std(list(channel_means['vf'].values()))
-        overall_mean_ith = np.mean(list(channel_means['ith'].values()))
-        overall_std_ith = np.std(list(channel_means['ith'].values()))
-        
-        # Detect outliers (channels beyond 2 standard deviations)
-        outlier_threshold = 2
-        outliers_pf = {ch: mean for ch, mean in channel_means['pf'].items() 
-                       if abs(mean - overall_mean_pf) > outlier_threshold * overall_std_pf}
-        outliers_vf = {ch: mean for ch, mean in channel_means['vf'].items() 
-                       if abs(mean - overall_mean_vf) > outlier_threshold * overall_std_vf}
-        outliers_ith = {ch: mean for ch, mean in channel_means['ith'].items() 
-                        if abs(mean - overall_mean_ith) > outlier_threshold * overall_std_ith}
+
+        # Use cached statistics
+        board_stats = self._board_stats_cache.get(current_board, {})
+        overall_mean_pf = board_stats.get('pf_mean', 0)
+        overall_std_pf = board_stats.get('pf_std', 0)
+        overall_mean_vf = board_stats.get('vf_mean', 0)
+        overall_std_vf = board_stats.get('vf_std', 0)
+        overall_mean_ith = board_stats.get('ith_mean', 0)
+        overall_std_ith = board_stats.get('ith_std', 0)
         
         # Plot Pf
         axs[0].set_title(f'Pf over Test (Mean: {overall_mean_pf:.2f} ± {overall_std_pf:.2f})')
@@ -178,11 +281,12 @@ class API:
         # Plot each channel
         for ch in sorted(self.channels_data.keys()):
             data = self.channels_data[ch]
-            
-            # Determine if channel is outlier and style accordingly
-            is_outlier_pf = ch in outliers_pf
-            is_outlier_vf = ch in outliers_vf
-            is_outlier_ith = ch in outliers_ith
+
+            # Use cached outlier flags
+            ch_stats = self._stats_cache.get((current_board, ch), {})
+            is_outlier_pf = ch_stats.get('is_outlier_pf', False)
+            is_outlier_vf = ch_stats.get('is_outlier_vf', False)
+            is_outlier_ith = ch_stats.get('is_outlier_ith', False)
             
             # Only show label for outliers
             label_pf = f'Channel {ch} (outlier)' if is_outlier_pf else None
@@ -215,44 +319,54 @@ class API:
         axs[2].legend(loc='best', fontsize=8)
         
         plt.tight_layout()
-        
+
         buffer = io.BytesIO()
         plt.savefig(buffer, format='png', dpi=120)
         buffer.seek(0)
         image_base64 = base64.b64encode(buffer.read()).decode()
         plt.close(fig)
-        
+
+        # Cache the plot
+        self._plot_cache[cache_key] = (cache_ver, f'data:image/png;base64,{image_base64}')
+
         return f'data:image/png;base64,{image_base64}'
-    
+
     def _generate_single_channel_plot(self, channel):
-        """Generate plot for a single channel"""
+        """Generate plot for a single channel. Uses cached statistics for performance."""
         if channel not in self.channels_data:
             return None
-        
+
+        current_board = self._current_board or (sorted(self.boards_data.keys())[0] if self.boards_data else None)
+        if current_board is None:
+            return None
+
+        cache_key = (current_board, str(channel))
+        cache_ver = self._cache_version
+
+        # Check if we have a cached plot
+        cached = self._plot_cache.get(cache_key)
+        if cached is not None and cached[0] == cache_ver:
+            return cached[1]
+
         data = self.channels_data[channel]
         test_cycles = [1, 2, 3, 4, 5]
         fig, axs = plt.subplots(3, 1, figsize=(8, 12))
-        
-        # Calculate statistics
-        channel_means = {'pf': {}, 'vf': {}, 'ith': {}}
-        for ch in self.channels_data.keys():
-            channel_means['pf'][ch] = np.mean(self.channels_data[ch]['pf'])
-            channel_means['vf'][ch] = np.mean(self.channels_data[ch]['vf'])
-            channel_means['ith'][ch] = np.mean(self.channels_data[ch]['ith'])
-        
-        overall_mean_pf = np.mean(list(channel_means['pf'].values()))
-        overall_std_pf = np.std(list(channel_means['pf'].values()))
-        overall_mean_vf = np.mean(list(channel_means['vf'].values()))
-        overall_std_vf = np.std(list(channel_means['vf'].values()))
-        overall_mean_ith = np.mean(list(channel_means['ith'].values()))
-        overall_std_ith = np.std(list(channel_means['ith'].values()))
-        
-        # Check if this channel is an outlier
-        outlier_threshold = 2
-        is_outlier_pf = abs(channel_means['pf'][channel] - overall_mean_pf) > outlier_threshold * overall_std_pf
-        is_outlier_vf = abs(channel_means['vf'][channel] - overall_mean_vf) > outlier_threshold * overall_std_vf
-        is_outlier_ith = abs(channel_means['ith'][channel] - overall_mean_ith) > outlier_threshold * overall_std_ith
-        
+
+        # Use cached statistics
+        board_stats = self._board_stats_cache.get(current_board, {})
+        overall_mean_pf = board_stats.get('pf_mean', 0)
+        overall_std_pf = board_stats.get('pf_std', 0)
+        overall_mean_vf = board_stats.get('vf_mean', 0)
+        overall_std_vf = board_stats.get('vf_std', 0)
+        overall_mean_ith = board_stats.get('ith_mean', 0)
+        overall_std_ith = board_stats.get('ith_std', 0)
+
+        # Use cached outlier flags
+        ch_stats = self._stats_cache.get((current_board, channel), {})
+        is_outlier_pf = ch_stats.get('is_outlier_pf', False)
+        is_outlier_vf = ch_stats.get('is_outlier_vf', False)
+        is_outlier_ith = ch_stats.get('is_outlier_ith', False)
+
         # Plot Pf
         title_suffix_pf = " ⚠️ OUTLIER" if is_outlier_pf else ""
         axs[0].set_title(f'Pf over Test Cycles - Channel {channel}{title_suffix_pf}')
@@ -261,12 +375,12 @@ class API:
         axs[0].axhline(y=overall_mean_pf, color='red', linestyle='--', alpha=0.5, label='Overall Mean')
         axs[0].axhline(y=overall_mean_pf + 2*overall_std_pf, color='orange', linestyle=':', alpha=0.5, label='±2σ')
         axs[0].axhline(y=overall_mean_pf - 2*overall_std_pf, color='orange', linestyle=':', alpha=0.5)
-        axs[0].plot(test_cycles, data['pf'], marker='o', linewidth=2, color='#667eea', 
+        axs[0].plot(test_cycles, data['pf'], marker='o', linewidth=2, color='#667eea',
                    markeredgewidth=2 if is_outlier_pf else 1,
                    markeredgecolor='red' if is_outlier_pf else None, markersize=8)
         axs[0].grid(True, alpha=0.3)
         axs[0].legend(loc='best')
-        
+
         # Plot Vf
         title_suffix_vf = " ⚠️ OUTLIER" if is_outlier_vf else ""
         axs[1].set_title(f'Vf over Test Cycles - Channel {channel}{title_suffix_vf}')
@@ -280,7 +394,7 @@ class API:
                    markeredgecolor='red' if is_outlier_vf else None, markersize=8)
         axs[1].grid(True, alpha=0.3)
         axs[1].legend(loc='best')
-        
+
         # Plot Ith
         title_suffix_ith = " ⚠️ OUTLIER" if is_outlier_ith else ""
         axs[2].set_title(f'Ith over Test Cycles - Channel {channel}{title_suffix_ith}')
@@ -294,15 +408,18 @@ class API:
                    markeredgecolor='red' if is_outlier_ith else None, markersize=8)
         axs[2].grid(True, alpha=0.3)
         axs[2].legend(loc='best')
-        
+
         plt.tight_layout()
-        
+
         buffer = io.BytesIO()
         plt.savefig(buffer, format='png', dpi=120)
         buffer.seek(0)
         image_base64 = base64.b64encode(buffer.read()).decode()
         plt.close(fig)
-        
+
+        # Cache the plot
+        self._plot_cache[cache_key] = (cache_ver, f'data:image/png;base64,{image_base64}')
+
         return f'data:image/png;base64,{image_base64}'
     
     def plot_channel(self, channel):
@@ -330,13 +447,16 @@ class API:
             # board is a string, no need to convert
             if board not in self.boards_data:
                 return {'success': False, 'error': f'Board {board} not found'}
-            
+
+            # Update current board tracking for cache key
+            self._current_board = board
+
             # Update current channels_data to selected board
             self.channels_data = self.boards_data[board]
-            
+
             # Generate plot for all channels of this board
             plot_image = self._generate_all_channels_plot()
-            
+
             return {
                 'success': True,
                 'plot': plot_image,
@@ -348,38 +468,38 @@ class API:
             return {'success': False, 'error': f'{str(e)}\n{traceback.format_exc()}'}
     
     def analyze(self):
-        """Analyze the selected folders"""
+        """Analyze the selected folders. Uses parallel processing for channels."""
         folders = self.selected_folders
-        
+
         if len(folders) != 5:
             return {'success': False, 'error': 'Need exactly 5 folders'}
-        
+
         try:
             board_ch_csv_list = {}  # {board: {ch: [csv_paths]}}
             for test_cycle in range(1, 6):
                 folder_path = folders[test_cycle - 1]
                 subfolder = os.path.join(folder_path, f"{os.path.basename(folder_path)}-1")
-                
+
                 if not os.path.exists(subfolder):
                     return {
-                        'success': False, 
+                        'success': False,
                         'error': f'Subfolder {subfolder} not found for Test Cycle {test_cycle}'
                     }
-                
+
                 csv_files = [f for f in os.listdir(subfolder) if f.endswith('.csv')]
                 if not csv_files:
                     return {
                         'success': False,
                         'error': f'No CSV files found in {subfolder}'
                     }
-                
+
                 for ch_csv in csv_files:
                     try:
                         # Extract board (as string)
                         board = ch_csv.split("_")[0][5:]
                         # Extract channel number
                         ch = int((ch_csv.split("_")[-1].split(".")[0])[2:])
-                        
+
                         if board not in board_ch_csv_list:
                             board_ch_csv_list[board] = {}
                         if ch not in board_ch_csv_list[board]:
@@ -388,51 +508,65 @@ class API:
                     except (ValueError, IndexError) as e:
                         print(f"Warning: Skipping invalid CSV filename: {ch_csv}")
                         continue
-            
-            # Collect data for all boards and channels
+
+            # Collect data for all boards and channels using parallel processing
             self.boards_data = {}
             skipped_channels = []  # Track skipped channels
-            
+
+            # Build list of all (board, ch, path_list) tuples for parallel processing
+            all_channel_tasks = []
             for board in sorted(board_ch_csv_list.keys()):
-                self.boards_data[board] = {}
                 for ch in sorted(board_ch_csv_list[board].keys()):
+                    all_channel_tasks.append((board, ch, {i: board_ch_csv_list[board][ch][i] for i in range(1, 6)}))
+
+            # Process channels in parallel using ThreadPoolExecutor
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import os as _os
+            max_workers = min(_os.cpu_count() or 4, 8)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_task = {
+                    executor.submit(_analyze_single_channel, board, ch, path_list): (board, ch)
+                    for board, ch, path_list in all_channel_tasks
+                }
+
+                for future in as_completed(future_to_task):
+                    board, ch = future_to_task[future]
                     try:
-                        temp_summary = collect_data_with_test_cycle({i: board_ch_csv_list[board][ch][i] for i in range(1, 6)})
-                        vf = []
-                        pf = []
-                        ith = []
-                        for test_cycle in range(1, 6):
-                            vf.append(temp_summary[test_cycle]["Vf"])
-                            pf.append(temp_summary[test_cycle]["Pf"])
-                            ith.append(temp_summary[test_cycle]["ith"])
-                        
-                        self.boards_data[board][ch] = {
-                            'vf': vf,
-                            'pf': pf,
-                            'ith': ith
-                        }
+                        result_data = future.result()
+                        if result_data is not None:
+                            if board not in self.boards_data:
+                                self.boards_data[board] = {}
+                            self.boards_data[board][ch] = result_data
+                        else:
+                            skipped_channels.append(f'Board {board} - Channel {ch}: parse error')
                     except Exception as e:
-                        # Skip problematic channel and continue
                         skipped_channels.append(f'Board {board} - Channel {ch}: {str(e)}')
                         print(f"Warning: Skipping Board {board} - Channel {ch} due to error: {str(e)}")
-                        continue
-            
+
             # Remove empty boards (all channels failed)
             self.boards_data = {board: channels for board, channels in self.boards_data.items() if channels}
-            
+
             if not self.boards_data:
                 return {
                     'success': False,
                     'error': f'No valid data found. Skipped channels:\n' + '\n'.join(skipped_channels[:10])
                 }
-            
+
+            # Compute and cache statistics for all boards
+            self._compute_and_cache_statistics()
+
+            # Invalidate plot cache since we have new data
+            self._plot_cache.clear()
+            self._cache_version += 1
+
             # Set first board as default for display
             first_board = sorted(self.boards_data.keys())[0]
+            self._current_board = first_board
             self.channels_data = self.boards_data[first_board]
-            
+
             # Generate plot for all channels of first board
             plot_image = self._generate_all_channels_plot()
-            
+
             result = {
                 'success': True,
                 'plot': plot_image,
@@ -440,14 +574,14 @@ class API:
                 'channels': list(self.channels_data.keys()),
                 'currentBoard': first_board
             }
-            
+
             # Add warning message if any channels were skipped
             if skipped_channels:
                 result['warning'] = f'跳過 {len(skipped_channels)} 個有問題的通道'
                 result['skippedChannels'] = skipped_channels
-            
+
             return result
-            
+
         except Exception as e:
             import traceback
             return {'success': False, 'error': f'{str(e)}\n{traceback.format_exc()}'}
